@@ -1,3 +1,7 @@
-/CRoaring/
+
+ebin/
+CRoaring/
+
+*.d
 *.o
 *.so

@@ -1,5 +1,20 @@
 -module(eroaring).
--export([new/1]).
+
+-export([
+    new/0,
+    add/2,
+    add_all/2,
+    cardinality/1,
+    contains/2,
+    remove/2,
+    run_optimise/1,
+    serialize/1,
+    union/2
+]).
+-export_type([
+    bits/0
+]).
+
 -on_load(init/0).
 
 % The name of the application we're writing. This is the name
@@ -12,6 +27,9 @@
 
 -define(LIBNAME, eroaring).
 
+% should be opaque, but erlc complains if that's exported
+-type bits() :: term().
+
 %% API
 
 % NIF functions end up overriding the functions defined in this module. But
@@ -22,7 +40,8 @@
 % A really nice person would make a pure Erlang fallback incase a NIF was
 % unable to load for a specific platform.
 
-new(_) ->
+-spec new() -> bits() | {error, term()}.
+new() ->
     not_loaded(?LINE).
 
 serialize(_) ->
@@ -46,6 +65,7 @@ contains(_, _) ->
 cardinality(_) ->
     not_loaded(?LINE).
 
+-spec run_optimise(bits()) -> bits() | {error, term()}.
 run_optimise(_) ->
     not_loaded(?LINE).
 
