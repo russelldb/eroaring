@@ -25,6 +25,30 @@
 new(_) ->
     not_loaded(?LINE).
 
+serialize(_) ->
+    not_loaded(?LINE).
+
+union(_, _) ->
+    not_loaded(?LINE).
+
+add(_, _) ->
+    not_loaded(?LINE).
+
+add_all(_, _) ->
+    not_loaded(?LINE).
+
+remove(_, _) ->
+    not_loaded(?LINE).
+
+contains(_, _) ->
+    not_loaded(?LINE).
+
+cardinality(_) ->
+    not_loaded(?LINE).
+
+run_optimise(_) ->
+    not_loaded(?LINE).
+
 %% Iternal functions
 
 % Since we used init/0 in our -on_load() preprocessor directive, this

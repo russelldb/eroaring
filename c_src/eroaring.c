@@ -16,6 +16,14 @@ ErlNifResourceType* ROARING;
 // Return value of 0 indicates success.
 // Docs: http://erlang.org/doc/man/erl_nif.html#load
 
+// Only free up the bit sets; the bitarray record
+// is actually allocated differently and should
+// be freed by the VM.
+void free_bitarray(ErlNifEnv* env, void* obj) {
+	roaring * r1 = (roaring *)obj;
+	enif_free(bits->set);
+}
+
 static int
 load(ErlNifEnv* env, void** priv, ERL_NIF_TERM load_info)
 {
