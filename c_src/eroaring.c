@@ -1,5 +1,5 @@
 #include "erl_nif.h"
-#include "roaring.c"
+#include "../roaring/roaring.c"
 
 typedef struct {
   roaring_bitmap_t *r;
