@@ -45,3 +45,20 @@ test_serialize(Lo, Hi) ->
     ?assertEqual(Cnt, eroaring:cardinality(Out)),
     ?assertEqual(Bin, eroaring:serialize(Bits)).
 
+segfault_test() ->
+    [test_bs_clock() || _ <- lists:seq(1, 10)].
+
+test_bs_clock() ->
+    Actors = [crypto:rand_bytes(24) || _ <- lists:seq(1, 1)],
+    FP = lists:seq(2, (1000*1000)*2, 2),
+    Es = lists:foldl(fun(Actor, Acc) ->
+                        orddict:store(Actor,
+                                      eroaring:add(eroaring:new(), FP),
+                                      Acc)
+                            end,
+                orddict:new(),
+                Actors),
+    lists:map(fun({A, E}) ->
+                      {A, eroaring:serialise(E)}
+              end,
+              Es).
