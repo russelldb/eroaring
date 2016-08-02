@@ -68,7 +68,8 @@ static ERL_NIF_TERM ATOM_ERROR;
 static ERL_NIF_TERM ATOM_ENOMEM;
 static ERL_NIF_TERM ATOM_TRUE;
 static ERL_NIF_TERM ATOM_FALSE;
-
+static ERL_NIF_TERM ATOM_INTERNAL;
+static ERL_NIF_TERM ATOM_BADMATCH;
 
 
 // The actual C implementation of the Erlang functions.
@@ -77,6 +78,9 @@ static ERL_NIF_TERM ATOM_FALSE;
 
 /*
  * eroaring:new() -> eroaring:bits()
+ * eroaring:new(Size :: pos_integer()) -> eroaring:bits()
+ * eroaring:new(From :: non_neg_integer(), To :: pos_integer())
+ *  -> eroaring:bits()
  */
 static ERL_NIF_TERM
 eroaring_new(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
@@ -84,128 +88,149 @@ eroaring_new(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
     roaring_bitmap_t *  bits;
     eroaring_t *        res;
 
-    if ((bits = roaring_bitmap_create()) == NULL)
+    switch (argc)
+    {
+        case 0 :
+            bits = roaring_bitmap_create();
+            break;
+        case 1 :
+        {
+            unsigned    size;
+            if (! enif_get_uint(env, argv[0], &size))
+                return  enif_make_badarg(env);
+            bits = roaring_bitmap_create_with_capacity(size);
+            break;
+        }
+        case 2 :
+        {
+            unsigned    lo, hi;
+            if (! enif_get_uint(env, argv[0], &lo)
+            ||  ! enif_get_uint(env, argv[1], &hi)
+            ||  lo >= hi)
+                return  enif_make_badarg(env);
+            if (++hi == 0)  /* check for wraparound, just in case */
+                --hi;
+            bits = roaring_bitmap_from_range(lo, hi, 1);
+            break;
+        }
+        default :
+            return  enif_make_badarg(env);
+    }
+    if (bits == NULL)
         return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
 
     if ((res = resource_ctor(bits)) == NULL)
+    {
+        /* resource allocation failed, need to clean up the 'bits' */
+        roaring_bitmap_free(bits);
         return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
+    }
 
     return  resource_to_term(env, res);
 }
 
 /*
  * eroaring:run_optimize(eroaring:bits()) -> eroaring:bits()
- * Returns an optimized COPY of the input resource.
+ * Modifies the bitmap IN PLACE!
  */
 static ERL_NIF_TERM
 eroaring_run_optimize(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
 {
-    roaring_bitmap_t *  bits;
-    eroaring_t *        res_in;
-    eroaring_t *        res_out;
+    eroaring_t *    res;
 
-    if (argc != 1 || (res_in = get_term_resource(env, *argv)) == NULL)
+    if (argc != 1 || (res = get_term_resource(env, *argv)) == NULL)
         return  enif_make_badarg(env);
 
-    /* @TED? Why do we copy? what happens to the old one? */
-    if ((bits = roaring_bitmap_copy(res_in->bits)) == NULL)
-        return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
+    /*
+     * Returns true/false indicating whether 'bits' contains any optimizable
+     * runs, but do we care?
+     */
+    roaring_bitmap_run_optimize(res->bits);
 
-    /* does anyone care about the result? */
-    roaring_bitmap_run_optimize(bits);
-
-    if ((res_out = resource_ctor(bits)) == NULL)
-        return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
-
-    return  resource_to_term(env, res_out);
+    return  *argv;
 }
 
 /*
- * eroaring:cardinality(eroaring:bits()) -> long
+ * eroaring:cardinality(eroaring:bits()) -> non_neg_integer()
  * Returns the cardinality of the bitset
  */
 static ERL_NIF_TERM
 eroaring_cardinality(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
 {
-  eroaring_t *        res_in;
+    eroaring_t *    res;
+    ErlNifUInt64    card;
 
-    if (argc != 1 || (res_in = get_term_resource(env, *argv)) == NULL)
+    if (argc != 1 || (res = get_term_resource(env, *argv)) == NULL)
         return  enif_make_badarg(env);
 
-    return  enif_make_long(env, roaring_bitmap_get_cardinality(res_in->bits));
+    card = roaring_bitmap_get_cardinality(res->bits);
+    return  enif_make_uint64(env, card);
 }
 
 /*
- * eroaring:add(int, eroaring:bits()) -> eroaring:bits()
- * Returns the input resource with int added
+ * eroaring:add(eroaring:bits(), non_neg_integer() | [non_neg_integer()])
+ *  -> eroaring:bits()
+ * Returns the input resource with the specified bit(s) added
  */
 static ERL_NIF_TERM
 eroaring_add(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
 {
-    roaring_bitmap_t *  bits;
-    eroaring_t *        res_in;
-    eroaring_t *        res_out;
-    long int            to_add;
+    eroaring_t *    res;
+    unsigned        num;
 
-    if (argc != 2 || (res_in = get_term_resource(env, *argv)) == NULL ||
-        !enif_get_long(env, argv[1], &to_add))
+    if (argc != 2 || (res = get_term_resource(env, *argv)) == NULL)
         return  enif_make_badarg(env);
 
-    /* Why do we copy? what happens to the old one? */
-    if ((bits = roaring_bitmap_copy(res_in->bits)) == NULL)
-        return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
+    if (enif_get_list_length(env, argv[1], &num))
+    {
+        unsigned        vals[256];  /* if more, we'll use the heap */
+        unsigned *      args;
+        ERL_NIF_TERM    head, tail;
+        unsigned        argx;
+        int             alloced;
+        /* make sure they're all appropriate bits before adding any of them */
+        if (num > (sizeof(vals)/sizeof(*vals)))
+        {
+            if ((args = enif_alloc(sizeof(*vals) * num)) == NULL)
+                return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
+            alloced = 1;
+        }
+        else
+        {
+            args = vals;
+            alloced = 0;
+        }
+        for (head = argv[1], argx = 0;
+            enif_get_list_cell(env, head, &head, &tail);
+            head = tail, ++argx)
+        {
+            if (! enif_get_uint(env, head, (args + argx)))
+            {
+                if (alloced)
+                    enif_free(args);
+                return  enif_make_badarg(env);
+            }
+        }
+        /* paranoid maybe */
+        if (argx != num)
+        {
+            if (alloced)
+                enif_free(args);
+            return  enif_make_tuple2(env, ATOM_ERROR,
+                        enif_make_tuple2(env, ATOM_INTERNAL, ATOM_BADMATCH));
+        }
+        for (argx = 0; argx < num; ++argx)
+            roaring_bitmap_add(res->bits, args[argx]);
+        if (alloced)
+            enif_free(args);
+    }
+    else if (enif_get_uint(env, argv[1], &num))
+        roaring_bitmap_add(res->bits, num);
+    else
+        return  enif_make_badarg(env);
 
-    /* does anyone care about the result? */
-    roaring_bitmap_add(bits, to_add);
-
-    if ((res_out = resource_ctor(bits)) == NULL)
-        return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
-
-    return  resource_to_term(env, res_out);
+    return  *argv;
 }
-
-/*
- * eroaring:add(int, eroaring:bits()) -> eroaring:bits()
- * Returns the input resource with int added
- */
-static ERL_NIF_TERM
-eroaring_add_all(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
-{
-  roaring_bitmap_t *  bits;
-  eroaring_t *        res_in;
-  eroaring_t *        res_out;
-  ERL_NIF_TERM        to_add;
-  ERL_NIF_TERM head, tail;
-  long bit;
-
-  if (argc != 2 || (res_in = get_term_resource(env, *argv)) == NULL ||
-      !enif_is_list(env, argv[1])) {
-    return  enif_make_badarg(env);
-  } else {
-    to_add = argv[1];
-  }
-
-  /* Why do we copy? what happens to the old one? */
-  if ((bits = roaring_bitmap_copy(res_in->bits)) == NULL)
-    return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
-
-  /* @TODO There must be a better way than iterating the list like
-     this? */
-  while(enif_get_list_cell(env, to_add, &head, &tail)) {
-    if(!enif_get_long(env, head, &bit)) {
-    return enif_make_badarg(env);
-  }
-  /* does anyone care about the result? */
-  roaring_bitmap_add(bits, bit);
-  to_add = tail;
-}
-
-  if ((res_out = resource_ctor(bits)) == NULL)
-    return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
-
-  return  resource_to_term(env, res_out);
-}
-
 
 /*
  * eroaring:serialize(eroaring:bits()) -> binary()
@@ -214,22 +239,22 @@ eroaring_add_all(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 eroaring_serialize(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
 {
-    roaring_bitmap_t *  bits;
-    eroaring_t *        res_in;
-    ErlNifBinary        output_binary;
+    eroaring_t *    res;
+    size_t          size;
+    ErlNifBinary    bin;
 
-    if (argc != 1 || (res_in = get_term_resource(env, *argv)) == NULL)
+    if (argc != 1 || (res = get_term_resource(env, *argv)) == NULL)
         return  enif_make_badarg(env);
 
-    if ((bits = res_in->bits) == NULL)
+    size = roaring_bitmap_portable_size_in_bytes(res->bits);
+    if (! enif_alloc_binary(size, &bin))
         return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
 
-    uint32_t expectedsize = roaring_bitmap_portable_size_in_bytes(bits);
-    enif_alloc_binary(expectedsize, &output_binary);
+    if (roaring_bitmap_portable_serialize(res->bits, (char *) bin.data) != size)
+        return  enif_make_tuple2(env, ATOM_ERROR,
+                    enif_make_tuple2(env, ATOM_INTERNAL, ATOM_BADMATCH));
 
-    roaring_bitmap_portable_serialize(bits, output_binary.data);
-
-    return enif_make_binary(env, &output_binary);
+    return  enif_make_binary(env, &bin);
 }
 
 /*
@@ -239,21 +264,24 @@ eroaring_serialize(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 eroaring_deserialize(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
 {
-  roaring_bitmap_t *  bits;
-  eroaring_t *        res_out;
-  ErlNifBinary        input_binary;
+    roaring_bitmap_t *  bits;
+    eroaring_t *        res;
+    ErlNifBinary        bin;
 
-  if (argc != 1 || !enif_inspect_iolist_as_binary(env, argv[0], &input_binary)) {
-    return enif_make_badarg(env);
-  }
+    if (argc != 1 || !enif_inspect_binary(env, *argv, &bin))
+        return  enif_make_badarg(env);
 
-  bits = roaring_bitmap_portable_deserialize(input_binary.data);
+    bits = roaring_bitmap_portable_deserialize((const char *) bin.data);
+    if (bits == NULL)
+        return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
 
+    if ((res = resource_ctor(bits)) == NULL)
+    {
+        roaring_bitmap_free(bits);
+        return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
+    }
 
-  if ((res_out = resource_ctor(bits)) == NULL)
-    return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
-
-  return  resource_to_term(env, res_out);
+    return  resource_to_term(env, res);
 }
 
 /*
@@ -315,9 +343,10 @@ eroaring_remove(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
 
 static ErlNifFunc nif_funcs[] = {
     {"new", 0, eroaring_new},
+    {"new", 1, eroaring_new},
+    {"new", 2, eroaring_new},
     {"run_optimize", 1, eroaring_run_optimize},
     {"add", 2, eroaring_add},
-    {"add_all", 2, eroaring_add_all},
     {"cardinality", 1, eroaring_cardinality},
     {"serialize", 1, eroaring_serialize},
     {"deserialize", 1, eroaring_deserialize},
@@ -345,6 +374,8 @@ static int load(
         init_atom(env, "enomem", &ATOM_ENOMEM);
         init_atom(env, "true", &ATOM_TRUE);
         init_atom(env, "false", &ATOM_FALSE);
+        init_atom(env, "internal", &ATOM_INTERNAL);
+        init_atom(env, "badmatch", &ATOM_BADMATCH);
     }
     return  rc;
 }

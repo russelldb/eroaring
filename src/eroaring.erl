@@ -1,9 +1,8 @@
 -module(eroaring).
 
 -export([
-         new/0,
+         new/0, new/1, new/2,
          add/2,
-         add_all/2,
          cardinality/1,
          contains/2,
          remove/2,
@@ -42,9 +41,29 @@
 % unable to load for a specific platform.
 
 -spec new() -> bits() | {error, term()}.
+%% @doc Creates a new bitset.
 new() ->
     not_loaded(?LINE).
 
+-spec new(Size :: pos_integer()) -> bits() | {error, term()}.
+%% @doc Creates a new bitset pre-allocated to hold up to Size bits.
+new(_) ->
+    not_loaded(?LINE).
+
+-spec new(Fromm :: non_neg_integer(), To :: pos_integer())
+        -> bits() | {error, term()}.
+%% @doc Creates a new bitset with lists:seq(From, To) bits set.
+new(_, _) ->
+    not_loaded(?LINE).
+
+-spec add(bits(), non_neg_integer() | [non_neg_integer()])
+        -> bits() | {error, term()}.
+%% @doc Modifies the bitset by turning on the specified Bit or Bits.
+add(_, _) ->
+    not_loaded(?LINE).
+
+-spec serialize(bits()) -> binary() | {error, term()}.
+%% @doc Returns a binary representing the bitset.
 serialize(_) ->
     not_loaded(?LINE).
 
@@ -52,12 +71,6 @@ deserialize(_) ->
     not_loaded(?LINE).
 
 union(_, _) ->
-    not_loaded(?LINE).
-
-add(_, _) ->
-    not_loaded(?LINE).
-
-add_all(_, _) ->
     not_loaded(?LINE).
 
 remove(_, _) ->
