@@ -1,16 +1,17 @@
 -module(eroaring).
 
 -export([
-    new/0,
-    add/2,
-    add_all/2,
-    cardinality/1,
-    contains/2,
-    remove/2,
-    run_optimise/1,
-    serialize/1,
-    union/2
-]).
+         new/0,
+         add/2,
+         add_all/2,
+         cardinality/1,
+         contains/2,
+         remove/2,
+         run_optimize/1,
+         serialize/1,
+         deserialize/1,
+         union/2
+        ]).
 -export_type([
     bits/0
 ]).
@@ -47,6 +48,9 @@ new() ->
 serialize(_) ->
     not_loaded(?LINE).
 
+deserialize(_) ->
+    not_loaded(?LINE).
+
 union(_, _) ->
     not_loaded(?LINE).
 
@@ -65,8 +69,8 @@ contains(_, _) ->
 cardinality(_) ->
     not_loaded(?LINE).
 
--spec run_optimise(bits()) -> bits() | {error, term()}.
-run_optimise(_) ->
+-spec run_optimize(bits()) -> bits() | {error, term()}.
+run_optimize(_) ->
     not_loaded(?LINE).
 
 %% Iternal functions
