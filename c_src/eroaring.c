@@ -183,46 +183,42 @@ eroaring_add(ErlNifEnv * env, int argc, const ERL_NIF_TERM argv[])
 
     if (enif_get_list_length(env, argv[1], &num))
     {
-        unsigned        vals[256];  /* if more, we'll use the heap */
-        unsigned *      args;
+        /*
+         * Check all of the values before adding any of them to the bitset.
+         * If the list is huge, iterate over it twice so we don't need to
+         * allocate heap memory to duplicate it.
+         */
+        unsigned        vals[4096/sizeof(unsigned)];  /* give it 4K of stack */
         ERL_NIF_TERM    head, tail;
-        unsigned        argx;
-        int             alloced;
-        /* make sure they're all appropriate bits before adding any of them */
+
         if (num > (sizeof(vals)/sizeof(*vals)))
         {
-            if ((args = enif_alloc(sizeof(*vals) * num)) == NULL)
-                return  enif_make_tuple2(env, ATOM_ERROR, ATOM_ENOMEM);
-            alloced = 1;
+            for (head = argv[1];
+                    enif_get_list_cell(env, head, &head, &tail); head = tail)
+                if (! enif_get_uint(env, head, &num))
+                    return  enif_make_badarg(env);
+            /* we know they're all suitable bits now, just add them */
+            for (head = argv[1];
+                    enif_get_list_cell(env, head, &head, &tail); head = tail)
+            {
+                enif_get_uint(env, head, &num);
+                roaring_bitmap_add(res->bits, num);
+            }
         }
         else
         {
-            args = vals;
-            alloced = 0;
+            unsigned    x = 0;
+            for (head = argv[1];
+                    enif_get_list_cell(env, head, &head, &tail); head = tail)
+                if (! enif_get_uint(env, head, (vals + x++)))
+                    return  enif_make_badarg(env);
+            /* paranoid maybe */
+            if (x != num)
+                return  enif_make_tuple2(env, ATOM_ERROR,
+                            enif_make_tuple2(env, ATOM_INTERNAL, ATOM_BADMATCH));
+            for (x = 0; x < num; ++x)
+                roaring_bitmap_add(res->bits, vals[x]);
         }
-        for (head = argv[1], argx = 0;
-            enif_get_list_cell(env, head, &head, &tail);
-            head = tail, ++argx)
-        {
-            if (! enif_get_uint(env, head, (args + argx)))
-            {
-                if (alloced)
-                    enif_free(args);
-                return  enif_make_badarg(env);
-            }
-        }
-        /* paranoid maybe */
-        if (argx != num)
-        {
-            if (alloced)
-                enif_free(args);
-            return  enif_make_tuple2(env, ATOM_ERROR,
-                        enif_make_tuple2(env, ATOM_INTERNAL, ATOM_BADMATCH));
-        }
-        for (argx = 0; argx < num; ++argx)
-            roaring_bitmap_add(res->bits, args[argx]);
-        if (alloced)
-            enif_free(args);
     }
     else if (enif_get_uint(env, argv[1], &num))
         roaring_bitmap_add(res->bits, num);
